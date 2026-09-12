@@ -40,12 +40,15 @@ alto" — são os pontos onde conflito é mais provável.
 ## Integração com o resto do projeto
 
 - LLM usado: DeepSeek (`api.deepseek.com`), não o provedor padrão do Strix
-  — ver variável `LLM_PROVIDER`/`LLM_BASE_URL` injetada pelo Job Kubernetes
-  em `backend/infra/k8s/job-template.yaml` (repo `backend`, não este).
-- Este fork é empacotado como imagem de container e rodado como Job
-  Kubernetes efêmero por scan — não como processo de longa duração. Ver
-  `backend/infra/k8s/orchestrator.py` para o ciclo de vida completo.
-- Egress de rede deste container é restrito por
-  `backend/infra/k8s/network-policy-template.yaml` (CiliumNetworkPolicy) —
-  qualquer novo domínio que o agente precise acessar tem que ser adicionado
-  lá, ou a chamada falha silenciosamente por bloqueio de rede.
+  — configurado via `llm_configs` (repo `backend`) e repassado ao CLI
+  `strix` como argumento/env var pelo worker abaixo.
+- Este fork é distribuído como pacote (`strix-agent`) e invocado como
+  **subprocesso CLI** (`strix ...`) pelo `backend/infra/deploy/
+  droplet_worker.py`, rodando numa instância dedicada com Docker local —
+  não como Job Kubernetes efêmero (arquitetura DOKS avaliada e abandonada
+  antes de qualquer integração real ser escrita, ver `backend/CLAUDE.md`).
+  O próprio CLI gerencia seu sandbox via Docker local (Docker-in-Docker).
+- **Isolamento de rede por scan não existe nesta arquitetura** — trade-off
+  aceito pela simplicidade do modelo de instância única (ver
+  `backend/CLAUDE.md`); não há mais `CiliumNetworkPolicy`/egress
+  restringido por scan.
