@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from agents import RunContextWrapper
     from agents.agent import Agent
     from agents.items import ModelResponse, TResponseInputItem
-    from agents.tool import Tool
 
 
 logger = logging.getLogger(__name__)
@@ -272,22 +271,3 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                         f"(>= {round(_SUBAGENT_BUDGET_RESERVE * 100)}% reserve); stopping this "
                         "sub-agent so the root agent can finish the scan."
                     )
-
-    async def on_tool_start(
-        self,
-        context: RunContextWrapper[dict[str, Any]],  # noqa: ARG002
-        agent: Agent[dict[str, Any]],  # noqa: ARG002
-        tool: Tool,
-    ) -> None:
-        """Tally every tool call for the run's coverage count (see
-        ``ReportState.record_tool_invocation``) — downstream (IronBOT)
-        surfaces this so a completed scan with zero findings still shows
-        proof that the agent actually did something, not just an empty
-        report."""
-        report_state = get_global_report_state()
-        if report_state is None:
-            return
-        try:
-            report_state.record_tool_invocation(tool.name)
-        except Exception:
-            logger.exception("failed to record tool invocation for %s", getattr(tool, "name", "unknown"))

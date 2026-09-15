@@ -78,6 +78,7 @@ async def preflight_model_connection(
         request_timeout=resolved_settings.llm.timeout,
         prompt_cache=False,
         extra_headers=resolved_settings.llm.extra_headers,
+        has_tools=False,
     )
     await asyncio.wait_for(
         model.get_response(
@@ -255,6 +256,8 @@ def _persist_run_record(args: argparse.Namespace) -> None:
         "user_instruction": getattr(args, "user_instruction", None),
         "non_interactive": args.non_interactive,
         "local_sources": getattr(args, "local_sources", []),
+        # Persisted so --resume places the same workspace files again.
+        "workspace_files": getattr(args, "workspace_files", []),
         # Persisted so --resume can remount the workspace: it is not a target,
         # so it cannot be rebuilt from targets_info.
         "workspace_mount": getattr(args, "workspace_mount", None),

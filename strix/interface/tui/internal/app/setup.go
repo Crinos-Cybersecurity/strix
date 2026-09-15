@@ -45,34 +45,28 @@ func (m *Model) submitSetupPrompt(value string) (tea.Model, tea.Cmd) {
 	if len(fields) > targets {
 		commands = append(commands, send(m.client, "setup.set_instruction", map[string]any{"instruction": value}))
 	}
-	// With a target, verify the model connection before the scan commits to it.
-	// A bare prompt launches optimistically, like a coding agent, and mounts the
-	// working directory - the backend asks about that from the live view, so the
-	// prompt is held here in case it is declined.
-	verify := targets > 0 || len(m.snapshot.Targets) > 0
-	payload := map[string]any{"verify": verify}
-	if verify {
-		m.setupMsg("Verifying model connection...", render.Col(amber))
-	} else {
+	// The backend verifies the model connection before either kind of launch
+	// and reports on it through the setup log. A bare prompt mounts the working
+	// directory - the backend asks about that from the live view, so the prompt
+	// is held here in case it is declined.
+	payload := map[string]any{}
+	if targets == 0 && len(m.snapshot.Targets) == 0 {
 		m.pendingPrompt = value
 		payload["mount_working_dir"] = true
 	}
 	commands = append(commands, send(m.client, "setup.start", payload))
 	// Ordered, not batched: setup.start leaves setup mode, so it must be the
-	// last command to reach the backend. Batched sends race, and once the
-	// preflight is skipped setup.start wins, making the target and instruction
-	// commands land after the guard closes and fail with a red error.
+	// last command to reach the backend. Batched sends race, and if setup.start
+	// wins the target and instruction commands land after the guard closes and
+	// fail with a red error.
 	return *m, tea.Sequence(commands...)
 }
 
 // answerMountConfirmation replies to the working-directory mount the backend is
-// waiting on. Declining returns to the start screen, so the prompt goes back in
-// the composer to be edited or given a target instead.
+// waiting on. Either answer starts the scan - declining only means it runs
+// without the directory - so the prompt stays with the run rather than coming
+// back to the composer.
 func (m *Model) answerMountConfirmation(approved bool) tea.Cmd {
-	if !approved && m.pendingPrompt != "" {
-		m.input.SetValue(m.pendingPrompt)
-		m.resizeViewport()
-	}
 	m.pendingPrompt = ""
 	return send(m.client, "setup.confirm_mount", map[string]any{"approved": approved})
 }

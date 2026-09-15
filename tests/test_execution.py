@@ -459,6 +459,49 @@ async def test_non_user_send_does_not_resume_budget_pause(tmp_path: Any) -> None
 
 
 @pytest.mark.asyncio
+async def test_user_send_starts_fresh_resume_attempt_after_failure() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    await coordinator.park_waiting("child", wait_kind="stalled")
+    await coordinator.record_recovery("child")
+    await coordinator.record_idle_resume("child")
+    await coordinator.set_status("child", "failed", error="provider rejected request")
+    assert await coordinator.claim_parent_notice("child") is True
+
+    delivered = await coordinator.send("child", {"from": "user", "content": "try again"})
+
+    assert delivered is True
+    assert coordinator.statuses["child"] == "waiting"
+    assert coordinator.pending_counts["child"] == 1
+    assert "child" not in coordinator.errors
+    assert "child" not in coordinator.wait_kinds
+    assert "child" not in coordinator.recovery_counts
+    assert "child" not in coordinator.idle_resume_counts
+    assert await coordinator.claim_parent_notice("child") is True
+
+
+@pytest.mark.asyncio
+async def test_non_user_send_preserves_failed_resume_state() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    await coordinator.park_waiting("child", wait_kind="stalled")
+    await coordinator.record_recovery("child")
+    await coordinator.record_idle_resume("child")
+    await coordinator.set_status("child", "failed", error="provider rejected request")
+
+    delivered = await coordinator.send("child", {"from": "root", "content": "status"})
+
+    assert delivered is True
+    assert coordinator.statuses["child"] == "failed"
+    assert coordinator.errors["child"] == "provider rejected request"
+    assert coordinator.wait_kinds["child"] == "stalled"
+    assert coordinator.recovery_counts["child"] == 1
+    assert coordinator.idle_resume_counts["child"] == 1
+
+
+@pytest.mark.asyncio
 async def test_reset_budget_stops_clears_pause_and_normalizes_statuses() -> None:
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
@@ -1228,3 +1271,40 @@ async def test_wait_kind_survives_a_snapshot_round_trip() -> None:
     assert restored.wait_kinds["root"] == "user"
     assert restored.idle_resume_counts["root"] == 1
     assert await execution._plain_waiting_timeout(restored, "root") is None
+
+
+@pytest.mark.asyncio
+async def test_interactive_nudge_offers_waiting_without_repeating() -> None:
+    """The nudge is the instruction an agent reads when it is stranded here.
+
+    It is where the option to wait on what was already said has to be, not only
+    in the system prompt: an agent that ended a turn on plain text reasons off
+    this text, and without the clause it restates its answer to reach a tool
+    call, so the user reads it twice.
+
+    The clause holds whatever the turn did, because the agent is the one who
+    knows whether it spoke — this fires for a turn that produced no text at all.
+    """
+    items = await execution._append_tool_required_message(
+        session=None,
+        context={"parent_id": None},
+        attempt=1,
+        limit=3,
+        interactive=True,
+    )
+
+    assert "with no message if you have already said it" in items[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_autonomous_nudge_does_not_offer_the_user() -> None:
+    """There is nobody attached to an autonomous run to wait for."""
+    items = await execution._append_tool_required_message(
+        session=None,
+        context={"parent_id": None},
+        attempt=1,
+        limit=3,
+        interactive=False,
+    )
+
+    assert "respond_to_user" not in items[0]["content"]
