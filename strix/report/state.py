@@ -124,6 +124,7 @@ class ReportState:
         self._llm_usage = LLMUsageLedger()
         auth_mode = codex.auth_mode(load_settings().llm.model)
         self._llm_usage.zero_cost = auth_mode == "subscription"
+        self._tool_usage: dict[str, int] = {}
         self.run_record: dict[str, Any] = {
             "run_id": self.run_id,
             "run_name": self.run_name,
@@ -133,6 +134,7 @@ class ReportState:
             "auth_mode": auth_mode,
             "targets_info": [],
             "llm_usage": self._build_llm_usage_record(),
+            "tool_usage": self._build_tool_usage_record(),
         }
         self._run_dir: Path | None = None
         self._saved_vuln_ids: set[str] = set()
@@ -187,6 +189,12 @@ class ReportState:
                 self.scan_results = scan_results
                 self.final_scan_result = self._format_final_scan_result(scan_results)
             self._hydrate_llm_usage(data.get("llm_usage"))
+            tool_usage = data.get("tool_usage")
+            if isinstance(tool_usage, dict) and isinstance(tool_usage.get("by_tool"), dict):
+                self._tool_usage = {
+                    str(k): int(v) for k, v in tool_usage["by_tool"].items() if isinstance(v, int)
+                }
+                self.run_record["tool_usage"] = self._build_tool_usage_record()
             logger.info("report state hydrated run.json from %s", run_dir)
 
         json_path = run_dir / "vulnerabilities.json"
@@ -323,6 +331,24 @@ class ReportState:
             usage=usage,
         ):
             self.save_run_data()
+
+    def record_tool_invocation(self, tool_name: str) -> None:
+        """Tally every tool call made during the run — proof-of-coverage
+        for the IronBOT report even when zero vulnerabilities are found
+        (downstream consumer asked: "how do we confirm anything was
+        actually attempted?"). Persisted into ``run.json``'s
+        ``tool_usage`` block on every call, mirroring the
+        ``record_sdk_usage`` pattern above; read by IronBOT's worker and
+        surfaced as a coverage count in the user-facing report."""
+        self._tool_usage[tool_name] = self._tool_usage.get(tool_name, 0) + 1
+        self.run_record["tool_usage"] = self._build_tool_usage_record()
+        self.save_run_data()
+
+    def _build_tool_usage_record(self) -> dict[str, Any]:
+        return {
+            "total_calls": sum(self._tool_usage.values()),
+            "by_tool": dict(self._tool_usage),
+        }
 
     def record_observed_llm_cost(self, cost: float) -> None:
         self._llm_usage.record_observed_cost(cost)
