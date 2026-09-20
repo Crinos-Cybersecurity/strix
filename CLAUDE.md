@@ -32,12 +32,37 @@ escreve sozinho, nenhuma modificação de código no fork.
 
 ## Estratégia de merge com upstream
 
-Preferimos **isolar customizações em arquivos novos** (ex: um adapter
-nosso que chama a API pública do Strix) em vez de editar os arquivos
-originais deles diretamente, sempre que a arquitetura do Strix permitir —
-isso reduz conflito de merge quase a zero. Quando a edição direta for
-inevitável (ex: mudar comportamento interno do agente), documentar aqui
-e considerar isolar num patch/diff versionado separadamente.
+**Política do projeto (decidida em 2026-09-19, vale pros três forks):**
+paridade total é mantida, e lacuna de ferramenta é coberta por
+**aplicação adicional NOSSA**, no nosso repositório, usando os pontos de
+extensão que a própria ferramenta oferece. Editar arquivo do upstream é
+último recurso.
+
+O que a paridade compra, medido: o upstream do Strix publica ~78
+commits/mês, e o do Prowler ganhou 49 checks AWS novos em 90 dias.
+Divergir custa isso. Há também um precedente caro DESTE fork, descrito na
+seção acima: a customização de `tool_usage` (14/09) foi revertida no
+mesmo dia porque o upstream já resolvia o problema melhor — só que
+custou o trabalho de escrevê-la.
+
+### Pontos de extensão do Strix (sem tocar no fork)
+
+| Mecanismo | Para quê |
+|---|---|
+| `--mcp-server` / `--mcp-config` | Capacidade NOVA para o agente (servidor MCP nosso, processo à parte) |
+| `--instruction` / `--instruction-file` | Orientar o agente sem mexer em prompt do upstream — já usamos `--instruction` no `droplet_worker.py` |
+| Ler artifacts (`coverage.json`, `vulnerabilities.json`) | Consumir o que o Strix já escreve, em vez de fazê-lo escrever outra coisa — é como a cobertura de teste foi resolvida |
+
+**Sem lacuna conhecida hoje** neste fork. A tabela existe pra que a
+próxima lacuna encontrada já tenha caminho, em vez de alguém editar o
+upstream por falta de alternativa. Os outros dois forks já exercitam a
+política: `backend/infra/deploy/cloud/checks/` (checks próprios do
+Prowler via `--checks-folder`) e
+`backend/infra/deploy/cloud/complemento_cartography.py` (coleta que o
+Cartography não faz).
+
+Quando a edição direta for MESMO inevitável, documentar aqui e abrir PR
+upstream, pra que a divergência tenha rota de saída.
 
 Antes de rodar `git merge upstream/main`, revisar o changelog do upstream
 por mudanças nos arquivos listados na seção acima como "risco de merge:
