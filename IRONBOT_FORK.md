@@ -1,9 +1,10 @@
 # strix (fork interno)
 
+> Carregado automaticamente pelo OpenCode via `instructions` no `opencode.json` deste repo.
+
 Este diretório é um FORK do Strix open source (upstream original:
-<preencher: url do repo oficial>). Preencha este arquivo à medida que
-customizações forem feitas — ele existe para que qualquer sessão do Claude
-Code (ou qualquer dev) saiba, sem precisar rodar `git diff` contra o
+https://github.com/usestrix/strix). Preencha este arquivo à medida que
+customizações forem feitas — ele existe para que qualquer sessão do agente (OpenCode) ou qualquer dev saiba, sem precisar rodar `git diff` contra o
 upstream, o que é "nosso" e o que é "deles".
 
 ## Remotos configurados
@@ -25,7 +26,7 @@ monta `coverage.json` automaticamente ao fim de todo scan
 `summary.outcomes` (ledger de superfícies revisadas + resultado de
 cada uma — reportado/sem problema/descartado/não aplicável/pendente)
 e `completeness.complete`/`caveats` (se o scan terminou de verdade ou
-foi cortado, e por quê). Ver `ironbot-backend/CLAUDE.md`, "Cobertura do
+foi cortado, e por quê). Ver `ironbot-backend/AGENTS.md`, "Cobertura do
 teste via coverage.json nativo", pra como o downstream (IronBOT) passou
 a consumir esse artifact — só LEITURA de um arquivo que o Strix já
 escreve sozinho, nenhuma modificação de código no fork.
@@ -77,9 +78,9 @@ alto" — são os pontos onde conflito é mais provável.
   **subprocesso CLI** (`strix ...`) pelo `backend/infra/deploy/
   droplet_worker.py`, rodando numa instância dedicada com Docker local —
   não como Job Kubernetes efêmero (arquitetura DOKS avaliada e abandonada
-  antes de qualquer integração real ser escrita, ver `backend/CLAUDE.md`).
+  antes de qualquer integração real ser escrita, ver `backend/AGENTS.md`).
   O próprio CLI gerencia seu sandbox via Docker local (Docker-in-Docker).
 - **Isolamento de rede por scan não existe nesta arquitetura** — trade-off
   aceito pela simplicidade do modelo de instância única (ver
-  `backend/CLAUDE.md`); não há mais `CiliumNetworkPolicy`/egress
+  `backend/AGENTS.md`); não há mais `CiliumNetworkPolicy`/egress
   restringido por scan.
