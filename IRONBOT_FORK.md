@@ -14,8 +14,22 @@ upstream, o que é "nosso" e o que é "deles".
 
 ## O que foi customizado em relação ao upstream
 
-**Nenhuma customização de código no momento** — zero diff em relação ao
-upstream. Histórico: uma customização foi adicionada em 2026-09-14
+### 1. OOB próprio (oob.ironbot.io) — `session_manager.py` (2026-10-01)
+
+- **O quê:** `create_or_reuse()` agora, ao subir o sandbox, escreve o config do
+  `interactsh-client` (`/home/pentester/.config/interactsh-client/config.yaml`)
+  apontando pro nosso servidor self-hosted `oob.ironbot.io`, **se e somente se**
+  a env `INTERACTSH_TOKEN` estiver presente no processo do `strix` (injetada pelo
+  worker `droplet_worker.py`). Sem a env, nada é tocado.
+- **Por quê:** as skills chamam `interactsh-client` nu (sem `-s`/`-t`), então os
+  callbacks OOB de SSRF/XSS/XXE iam para os servidores públicos (`oast.*`).
+  O config no `$HOME` redireciona sem tocar nas skills.
+- **Token nunca no git:** entra por env/runtime; o código do fork só referencia a
+  variável `INTERACTSH_TOKEN`, nunca o valor.
+- **Melhor esforço:** falha ao escrever só loga (`logger.warning`), não derruba o scan.
+- **Rota de saída:** PR upstream do `session_manager.py` (ver seção de merge).
+
+**Histórico:** uma customização foi adicionada em 2026-09-14
 (contagem de invocação de ferramenta, `tool_usage` em `run.json`) pra
 provar que um scan concluído sem achados de fato tentou algo, mas foi
 REVERTIDA no mesmo dia ao sincronizar com `upstream/main` (v1.5.0 →

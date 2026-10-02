@@ -199,6 +199,40 @@ def _validated_extra_file(
     return rel, content
 
 
+async def _configure_interactsh_client(session: BaseSandboxSession, token: str) -> None:
+    """Write the interactsh-client config so bare invocations use our server.
+
+    The skills call ``interactsh-client`` without ``-s``/``-t``, so the client
+    reads ``$HOME/.config/interactsh-client/config.yaml``. Pointing that file
+    at ``oob.ironbot.io`` + the token routes OOB callbacks (SSRF/XSS/XXE) to
+    our self-hosted server instead of the public oast.* servers. The token
+    arrives via the host environment (``INTERACTSH_TOKEN``), never from git.
+
+    Best-effort: a failure only logs and the scan proceeds (the client then
+    falls back to its built-in default). """
+    config = f"server:\n  - oob.ironbot.io\ntoken: {token}\n"
+    result = await session.exec(
+        "sh",
+        "-c",
+        'mkdir -p /home/pentester/.config/interactsh-client && '
+        'printf "%s" "$1" > /home/pentester/.config/interactsh-client/config.yaml && '
+        'chown pentester:pentester /home/pentester/.config/interactsh-client/config.yaml '
+        '2>/dev/null || true',
+        "sh",
+        config,
+        timeout=30,
+    )
+    if result.ok():
+        logger.info("interactsh-client config written (OOB oob.ironbot.io)")
+    else:
+        stderr = (result.stderr or b"").decode("utf-8", errors="replace").strip()
+        logger.warning(
+            "interactsh-client config write failed (exit %s): %s",
+            result.exit_code,
+            stderr,
+        )
+
+
 async def stage_extra_files(session: BaseSandboxSession, archive: bytes) -> None:
     """Upload ``archive`` and unpack it under ``/workspace`` as the sandbox user.
 
@@ -338,6 +372,16 @@ async def create_or_reuse(
         except BaseException:
             await _discard_session(client, session)
             raise
+
+    # OOB próprio (oob.ironbot.io): aponta o `interactsh-client` invocado
+    # "nu" pelas skills pro nosso servidor self-hosted, escrevendo o config
+    # dele a partir do token injetado pelo worker (INTERACTSH_TOKEN). Sem
+    # token no ambiente, nada é tocado e o client segue no default (oast.*).
+    # Melhor esforço: falha aqui só loga, não derruba o scan.
+    interactsh_token = os.environ.get("INTERACTSH_TOKEN", "").strip()
+    if interactsh_token:
+        report("Configuring OOB interactsh client")
+        await _configure_interactsh_client(session, interactsh_token)
 
     report("Setting up the proxy")
     caido_endpoint = await session.resolve_exposed_port(_CONTAINER_CAIDO_PORT)
