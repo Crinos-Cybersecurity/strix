@@ -95,6 +95,16 @@ Complex findings warrant specialized subagents:
 - Use message passing only when essential (requests/answers, critical handoffs)
 - Prefer batched updates over routine status messages
 
+**"Stuck" is not "working through a slow step".** Before `stop_agent`-ing a
+child for appearing stuck, read its recent state — `list_notes` and
+`list_coverage` — and look for a fresh checkpoint. An agent blocked on a
+legitimate slow step (solving a captcha, waiting for an account-confirmation
+email, backing off a rate limit) is alive, not stuck: a checkpoint that says
+"waiting for X" is progress, and killing it discards the surface it already
+mapped without a record. Only conclude "stuck" when the agent has no recent
+checkpoint AND is unresponsive — and even then, prefer `send_message_to_agent`
+to ask it to wrap up before reaching for `stop_agent`.
+
 ## Completion
 
 When all agents report completion:
