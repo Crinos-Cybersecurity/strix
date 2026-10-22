@@ -315,13 +315,25 @@ def _completeness(
     run_record: dict[str, Any],
     agents: list[dict[str, Any]],
     exit_reason: str | None,
+    gaps: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Whether this record can be read as a complete account of the scan.
 
     Any of these makes it partial, and the caveats say which: the run did not
     reach ``completed``, an agent was still live or died when the scan ended,
-    or the run stopped for a reason other than the root agent deciding it was
-    done (budget ceilings are the common case).
+    the run stopped for a reason other than the root agent deciding it was
+    done (budget ceilings are the common case), or the runtime itself found
+    scope an agent was equipped for and never accounted for.
+
+    The last one is not the same failure as the others, and grouping it here
+    is deliberate. A scan whose agents all finished cleanly can still carry a
+    hole the ledger does not describe — a risk class the agent was equipped
+    for and never recorded. Reporting ``complete: true`` next to a non-empty
+    ``gaps`` list told two contradictory things at once: this module's own
+    docstring says a carried-but-unrecorded class must surface under
+    ``gaps``, and a reader of ``completeness`` alone took the record as an
+    account of the whole scope. The gaps list stays where the detail lives;
+    ``completeness`` only refuses to call the account complete.
     """
     status = str(run_record.get("status") or "unknown")
     caveats: list[str] = []
@@ -342,6 +354,17 @@ def _completeness(
         caveats.append(
             f"The run terminated via '{exit_reason}' rather than the root agent finishing, "
             "so remaining scope was not reached."
+        )
+    if gaps:
+        # Count by kind so the caveat names the shape of the hole, not just its size.
+        kinds: dict[str, int] = {}
+        for gap in gaps:
+            kind = str(gap.get("kind") or "unknown")
+            kinds[kind] = kinds.get(kind, 0) + 1
+        detail = ", ".join(f"{count} {kind}" for kind, count in sorted(kinds.items()))
+        caveats.append(
+            f"The runtime recorded {len(gaps)} coverage gap(s) ({detail}); the scope they "
+            "name is unexamined, so this record is not an account of the whole scan."
         )
 
     return {
@@ -424,7 +447,7 @@ def build_coverage_document(
             "findings_filed": len(vulnerability_reports),
             "source": "runtime",
         },
-        "completeness": _completeness(run_record, agents, exit_reason),
+        "completeness": _completeness(run_record, agents, exit_reason, gaps),
         "entries": ledger,
         "gaps": gaps,
     }

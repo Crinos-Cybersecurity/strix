@@ -163,6 +163,29 @@ def test_failed_run_status_makes_the_record_partial() -> None:
     assert doc["completeness"]["complete"] is False
 
 
+def test_gaps_make_the_record_partial_even_when_the_run_finished() -> None:
+    """A clean run can still carry scope the runtime never saw examined.
+
+    The agent finished cleanly and the run reached ``completed``, so every
+    other completeness signal says "fine". But it carried the
+    ``business_logic`` skill and recorded nothing about it, which the runtime
+    observes independently of anything the agent claimed. Reporting
+    ``complete: true`` beside a non-empty ``gaps`` list said two contradictory
+    things at once (scan 3dea7ac4, 22/10/2026, surfaced exactly that).
+    """
+    doc = _document(
+        agent_graph=_graph(
+            metadata={"agent-1": {"skills": ["idor", "business_logic"], "task": "api review"}}
+        ),
+        exit_reason="finished_by_tool",
+    )
+
+    assert [gap["kind"] for gap in doc["gaps"]] == ["unrecorded_risk_class"]
+    assert doc["completeness"]["complete"] is False
+    caveat = doc["completeness"]["caveats"][0]
+    assert "coverage gap" in caveat
+    assert "unrecorded_risk_class" in caveat
+
 def test_write_coverage_emits_a_top_level_artifact(tmp_path: Path) -> None:
     path = write_coverage(tmp_path, _document())
 
