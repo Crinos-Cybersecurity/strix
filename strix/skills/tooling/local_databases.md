@@ -5,9 +5,13 @@ description: Database servers pre-installed in the sandbox (MongoDB, Redis, Post
 
 # Local Databases in the Sandbox
 
-`mongod`, `redis-server`, `postgres`, `mariadb` and `sqlite3` are installed in this sandbox, and a
-helper called `sandbox-db` (in `~/.local/bin`, already on `PATH`) starts them correctly. **Start with
-the helper** — do not rediscover flags, paths or init quirks.
+The database servers are installed in this sandbox, and a helper called `sandbox-db` (in `~/.local/bin`,
+already on `PATH`) starts and stops them. **`sandbox-db` is the only sanctioned way to run a server**:
+never start or stop `mongod`, `redis-server`, `postgres`/`pg_ctl` or `mariadbd` directly, and there is
+no alternate path.
+
+The helper owns `--dir`/`--dbpath`, ports and startup order, and already handles the traps listed
+below — a hand-rolled start leaves you with a different server than the one the app will talk to.
 
 Run `sandbox-db` without arguments for the usage line.
 
