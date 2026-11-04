@@ -29,7 +29,7 @@ def coverage_store(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _record(**overrides: str) -> dict[str, Any]:
+def _record(**overrides: Any) -> dict[str, Any]:
     kwargs = {
         "surface": "POST /api/orders/{id}",
         "risk_area": "object-level authorization",
@@ -52,6 +52,70 @@ def test_record_persists_entry(coverage_store: Path) -> None:
     assert entries[0]["outcome"] == "no_issue_found"
     assert entries[0]["agent_name"] == "authz-tester"
     assert (coverage_store / "coverage.json").exists()
+
+
+def test_record_stores_the_structured_risk_class() -> None:
+    result = _record(risk_class="business_logic")
+
+    assert result["success"] is True
+    entry = get_coverage_entries()[0]
+    assert entry["risk_class"] == "business_logic"
+    assert entry["risk_class_source"] == "agent"
+    assert entry["risk_area"] == "object-level authorization", "prose stays free text"
+
+
+def test_record_normalizes_a_category_qualified_risk_class() -> None:
+    assert _record(risk_class="vulnerabilities/sql_injection")["success"] is True
+
+    assert get_coverage_entries()[0]["risk_class"] == "sql_injection"
+
+
+def test_record_rejects_a_risk_class_that_is_not_a_skill() -> None:
+    result = _record(risk_class="XSS/SSRF/XXE/SSTI/RCE sinks")
+
+    assert result["success"] is False
+    assert any("Invalid risk_class" in e for e in result["errors"])
+    assert not get_coverage_entries()
+
+
+def test_record_without_a_risk_class_stays_unclassified() -> None:
+    assert _record()["success"] is True
+
+    entry = get_coverage_entries()[0]
+    assert "risk_class" not in entry
+
+
+def test_risk_class_is_derived_only_when_the_assignment_is_unambiguous() -> None:
+    assert _record(assigned_skills=["business_logic"])["success"] is True
+
+    entry = get_coverage_entries()[0]
+    assert entry["risk_class"] == "business_logic"
+    assert entry["risk_class_source"] == "derived_from_assignment"
+
+
+def test_ambiguous_assignment_does_not_invent_a_risk_class() -> None:
+    assert _record(assigned_skills=["sql_injection", "xss"])["success"] is True
+
+    assert "risk_class" not in get_coverage_entries()[0]
+
+
+def test_explicit_risk_class_wins_over_the_assignment() -> None:
+    assert _record(risk_class="xss", assigned_skills=["sql_injection", "xss"])["success"] is True
+
+    entry = get_coverage_entries()[0]
+    assert entry["risk_class"] == "xss"
+    assert entry["risk_class_source"] == "agent"
+
+
+def test_update_can_add_the_missing_risk_class() -> None:
+    entry_id = str(_record()["entry_id"])
+
+    result = _update(entry_id, risk_class="business_logic")
+
+    assert result["success"] is True
+    entry = get_coverage_entries()[0]
+    assert entry["risk_class"] == "business_logic"
+    assert entry["risk_class_source"] == "agent"
 
 
 def test_record_normalizes_outcome() -> None:
@@ -115,7 +179,7 @@ def test_hydrate_reloads_from_disk(coverage_store: Path) -> None:
     assert entries[0]["risk_area"] == "object-level authorization"
 
 
-def _update(entry_id: str, **overrides: str) -> dict[str, Any]:
+def _update(entry_id: str, **overrides: Any) -> dict[str, Any]:
     kwargs = {
         "entry_id": entry_id,
         "outcome": "reported",

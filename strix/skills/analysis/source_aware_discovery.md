@@ -208,4 +208,5 @@ already opened.
 
 Keep reading until no distinct plausible candidate remains — then record
 what you swept with `record_coverage`, including the families that came
-back clean.
+back clean, and set `risk_class` to the skill name for each family you
+closed.

@@ -20,9 +20,10 @@ A coverage claim is an attestation, so conflating the two would be the worst
 possible failure: a hallucinated "tested and clean" is strictly less honest
 than no coverage record at all. Every entry therefore carries its ``source``,
 and machine-observed facts contradict rather than confirm — an agent that
-carried the ``sql_injection`` skill and recorded nothing about SQL injection
-shows up under ``gaps``, and a run that hit its budget ceiling is stamped
-``complete: false`` no matter how tidy the ledger looks.
+carried the ``sql_injection`` skill and recorded no row with
+``risk_class: sql_injection`` shows up under ``gaps``, and a run that hit its
+budget ceiling is stamped ``complete: false`` no matter how tidy the ledger
+looks.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from strix.report.writer import atomic_write_text
-from strix.skills import get_available_skills
+from strix.skills import get_risk_skill_names
 
 
 if TYPE_CHECKING:
@@ -60,85 +61,6 @@ _INCOMPLETE_AGENT_STATUSES = frozenset({"crashed", "stopped", "running", "waitin
 #: Run statuses that mean the scan itself did not run to completion.
 _INCOMPLETE_RUN_STATUSES = frozenset({"failed", "interrupted", "stopped", "running"})
 
-#: Only this skill category names a vulnerability class. ``tooling`` and
-#: ``reconnaissance`` skills describe how an agent works, not what it hunts,
-#: so holding one implies no coverage obligation.
-_RISK_SKILL_CATEGORY = "vulnerabilities"
-
-#: How each vulnerability skill can legitimately appear in a ledger row.
-#:
-#: Matching a skill to a row is textual, and a skill's filename is not how a
-#: pentester writes the class down: an agent carrying ``path_traversal_lfi_rfi``
-#: records "Path Traversal", and one carrying ``weak_password_detection``
-#: records "weak password policy". A row matches when it contains every word
-#: of *any one* phrasing here. Skills absent from this map fall back to their
-#: own words, so a new skill is merely matched strictly, never crashed on —
-#: but add an entry, because a false gap asserts something untrue in a report.
-_SKILL_PHRASINGS: dict[str, tuple[str, ...]] = {
-    "agentic_system_security": (
-        "agentic",
-        "agent tool",
-        "mcp",
-        "confused deputy",
-        "tool invocation",
-    ),
-    "argument_injection": ("argument injection", "option injection", "argv"),
-    "authentication_jwt": ("authentication", "jwt", "session"),
-    "broken_function_level_authorization": (
-        "function level authorization",
-        "authorization",
-        "access control",
-        "privilege escalation",
-    ),
-    "browser_security": (
-        "browser",
-        "postmessage",
-        "xs leak",
-        "service worker",
-        "cross origin state",
-    ),
-    "business_logic": ("business logic", "logic flaw"),
-    "csrf": ("csrf", "cross site request forgery"),
-    "header_injection": ("header injection", "host header", "crlf"),
-    "http_request_smuggling": ("request smuggling", "desync"),
-    "idor": ("idor", "object level authorization", "bola", "direct object reference"),
-    "information_disclosure": (
-        "information disclosure",
-        "information leak",
-        "sensitive data",
-        "data exposure",
-    ),
-    "insecure_deserialization": ("deserialization",),
-    "insecure_file_uploads": ("file upload",),
-    "llm_prompt_injection": ("prompt injection",),
-    "mass_assignment": ("mass assignment", "parameter binding"),
-    "nosql_injection": ("nosql",),
-    "open_redirect": ("redirect",),
-    "path_traversal_lfi_rfi": (
-        "path traversal",
-        "directory traversal",
-        "file inclusion",
-        "lfi",
-        "rfi",
-    ),
-    "prototype_pollution": ("prototype pollution",),
-    "race_conditions": ("race condition", "toctou"),
-    "rce": ("rce", "remote code execution", "code execution", "command injection"),
-    "semantic_confusion": (
-        "semantic confusion",
-        "parser differential",
-        "normalization",
-        "validator sink mismatch",
-    ),
-    "sql_injection": ("sql injection", "sqli"),
-    "ssrf": ("ssrf", "server side request forgery"),
-    "ssti": ("ssti", "template injection"),
-    "subdomain_takeover": ("subdomain takeover",),
-    "weak_password_detection": ("password", "credential", "brute force"),
-    "xss": ("xss", "cross site scripting", "script injection"),
-    "xxe": ("xxe", "xml external entity", "xml entity"),
-}
-
 
 def read_agent_graph(state_dir: Path) -> dict[str, Any]:
     """Load the coordinator's snapshot, or ``{}`` when it isn't readable.
@@ -159,23 +81,13 @@ def read_agent_graph(state_dir: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _normalized(text: str) -> str:
-    """Lowercase *text* with punctuation flattened to spaces, for matching."""
-    return "".join(char if char.isalnum() else " " for char in text.lower())
-
-
 def _skill_leaf(skill: str) -> str:
     return skill.rsplit("/", maxsplit=1)[-1].strip().lower()
 
 
 def _risk_skill_names() -> frozenset[str]:
     """Bare names of every skill that denotes a vulnerability class."""
-    try:
-        entries = get_available_skills().get(_RISK_SKILL_CATEGORY, [])
-        return frozenset(entry["name"] for entry in entries if entry.get("name"))
-    except OSError:
-        logger.warning("could not enumerate skills for coverage gaps", exc_info=True)
-        return frozenset()
+    return get_risk_skill_names()
 
 
 def agents_from_graph(graph: dict[str, Any]) -> list[dict[str, Any]]:
@@ -215,16 +127,18 @@ def agents_from_graph(graph: dict[str, Any]) -> list[dict[str, Any]]:
     return agents
 
 
-def _skill_phrasings(skill: str) -> list[list[str]]:
-    """Word lists that would each count as a ledger row naming *skill*."""
-    phrasings = _SKILL_PHRASINGS.get(skill) or (skill,)
-    return [terms for phrase in phrasings if (terms := _normalized(phrase).split())]
+def _recorded_risk_classes(entries: list[dict[str, Any]]) -> frozenset[str]:
+    """Canonical risk classes the ledger says were assessed.
 
-
-def _entry_is_about(entry: dict[str, Any], phrasings: list[list[str]]) -> bool:
-    """True when a ledger row plausibly concerns any phrasing of a risk class."""
-    haystack = _normalized(f"{entry.get('risk_area', '')} {entry.get('surface', '')}")
-    return any(all(term in haystack for term in terms) for terms in phrasings)
+    Only the structured ``risk_class`` field is consulted. ``risk_area`` is
+    prose kept for human readers and takes no part in this match: a sentence
+    cannot be compared to a skill name without guessing, and guessing here
+    both invented coverage that was never recorded and missed coverage that
+    was (scan 0e9c916d published a false gap exactly that way).
+    """
+    return frozenset(
+        leaf for entry in entries if (leaf := _skill_leaf(str(entry.get("risk_class") or "")))
+    )
 
 
 def skill_coverage_gaps(
@@ -249,9 +163,9 @@ def skill_coverage_gaps(
                 carriers.setdefault(leaf, []).append(str(agent["agent_name"]))
 
     gaps: list[dict[str, Any]] = []
+    recorded = _recorded_risk_classes(entries)
     for skill, agent_names in sorted(carriers.items()):
-        phrasings = _skill_phrasings(skill)
-        if any(_entry_is_about(entry, phrasings) for entry in entries):
+        if skill in recorded:
             continue
         gaps.append(
             {
@@ -401,6 +315,8 @@ def build_coverage_document(
         {
             "surface": entry.get("surface", ""),
             "risk_area": entry.get("risk_area", ""),
+            "risk_class": entry.get("risk_class", ""),
+            "risk_class_source": entry.get("risk_class_source", ""),
             "outcome": entry.get("outcome", ""),
             "outcome_label": OUTCOME_LABELS.get(str(entry.get("outcome", "")), ""),
             "evidence": entry.get("evidence", ""),
