@@ -1,0 +1,187 @@
+#!/bin/bash
+# sandbox-db — sobe/derruba bancos de dados locais DENTRO do sandbox do scan.
+#
+# Existe porque o agente precisa REPRODUZIR comportamento de banco (ex.: provar
+# isolamento entre tenants no Mongo) e não pode perder passos descobrindo flags.
+# Cada servidor tem uma armadilha própria que este script já resolve:
+#
+#   mongod     precisa de --dbpath gravável + --fork com logpath
+#   redis      precisa de --dir gravável
+#   postgres   binários em /usr/lib/postgresql/<v>/bin (symlinkados),
+#              e initdb exige diretório VAZIO
+#   mariadb    NÃO consegue escrever o PID padrão em /run/mysqld (root) —
+#              morre com "can't create PID file: Permission denied" e a
+#              mensagem só aparece no log, não no terminal.
+#
+# Uso:
+#   sandbox-db start mongo|redis|postgres|mysql|all
+#   sandbox-db stop   mongo|redis|postgres|mysql|all
+#   sandbox-db status
+#   sandbox-db url    mongo|redis|postgres|mysql   # imprime a DSN de conexão
+#
+# Portas fixas (não colidem com serviços do host):
+#   mongo 27017 | redis 6379 | postgres 5432 | mysql 3306
+#
+# Tudo é efêmero: os dados vivem em ~/dbdata/<banco> e o sandbox é descartado
+# ao fim do scan. Nada aqui é persistente por desenho.
+
+set -uo pipefail
+
+BASE="${HOME}/dbdata"
+LOGS="${HOME}/dblogs"
+RUN="${HOME}/dbdata/run"
+
+MONGOD_PORT=27017
+REDIS_PORT=6379
+PG_PORT=5432
+MY_PORT=3306
+
+mkdir -p "$BASE"/{mongo,redis,postgres,mysql} "$LOGS" "$RUN" 2>/dev/null
+
+ok()   { echo "[ok] $*"; }
+warn() { echo "[!]  $*"; }
+die()  { echo "[erro] $*" >&2; exit 1; }
+
+start_mongo() {
+  if mongosh --quiet --port $MONGOD_PORT --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1; then
+    ok "mongo ja esta rodando na porta $MONGOD_PORT"; return 0
+  fi
+  mkdir -p "$BASE/mongo"
+  mongod --dbpath "$BASE/mongo" --port $MONGOD_PORT \
+         --fork --logpath "$LOGS/mongo.log" --bind_ip 127.0.0.1 >/dev/null 2>&1 \
+    || { warn "mongod nao subiu; ultimas linhas do log:"; tail -5 "$LOGS/mongo.log"; return 1; }
+  for _ in $(seq 1 20); do
+    mongosh --quiet --port $MONGOD_PORT --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1 \
+      && { ok "mongo em mongodb://127.0.0.1:$MONGOD_PORT"; return 0; }
+    sleep 1
+  done
+  warn "mongod subiu mas nao respondeu em 20s"; return 1
+}
+
+stop_mongo() {
+  mongosh --quiet --port $MONGOD_PORT --eval 'db.getSiblingDB("admin").shutdownServer()' >/dev/null 2>&1
+  pkill -f "mongod --dbpath $BASE/mongo" 2>/dev/null
+  ok "mongo parado"
+}
+
+start_redis() {
+  if redis-cli -p $REDIS_PORT ping >/dev/null 2>&1; then
+    ok "redis ja esta rodando na porta $REDIS_PORT"; return 0
+  fi
+  redis-server --port $REDIS_PORT --daemonize yes --dir "$BASE/redis" \
+               --logfile "$LOGS/redis.log" --bind 127.0.0.1 >/dev/null 2>&1 \
+    || { warn "redis nao subiu"; return 1; }
+  for _ in $(seq 1 15); do
+    redis-cli -p $REDIS_PORT ping >/dev/null 2>&1 \
+      && { ok "redis em redis://127.0.0.1:$REDIS_PORT"; return 0; }
+    sleep 1
+  done
+  warn "redis nao respondeu em 15s"; return 1
+}
+
+stop_redis() {
+  redis-cli -p $REDIS_PORT shutdown nosave >/dev/null 2>&1
+  ok "redis parado"
+}
+
+start_postgres() {
+  if pg_isready -h /tmp -p $PG_PORT >/dev/null 2>&1; then
+    ok "postgres ja esta rodando na porta $PG_PORT"; return 0
+  fi
+  if [ ! -f "$BASE/postgres/PG_VERSION" ]; then
+    # initdb EXIGE diretorio vazio: limpa residuo de tentativa anterior.
+    rm -rf "${BASE:?}/postgres" && mkdir -p "$BASE/postgres"
+    initdb -D "$BASE/postgres" -U postgres --auth=trust >"$LOGS/initdb.log" 2>&1 \
+      || { warn "initdb falhou; ver $LOGS/initdb.log"; tail -5 "$LOGS/initdb.log"; return 1; }
+  fi
+  pg_ctl -D "$BASE/postgres" -o "-p $PG_PORT -k /tmp -c listen_addresses=127.0.0.1" \
+         -l "$LOGS/postgres.log" start >/dev/null 2>&1
+  for _ in $(seq 1 20); do
+    pg_isready -h /tmp -p $PG_PORT >/dev/null 2>&1 \
+      && { ok "postgres em postgresql://postgres@127.0.0.1:$PG_PORT/postgres (trust)"; return 0; }
+    sleep 1
+  done
+  warn "postgres nao respondeu em 20s"; tail -5 "$LOGS/postgres.log"; return 1
+}
+
+stop_postgres() {
+  pg_ctl -D "$BASE/postgres" stop -m fast >/dev/null 2>&1
+  ok "postgres parado"
+}
+
+start_mysql() {
+  if mariadb-admin --socket="$RUN/mysql.sock" -u root ping >/dev/null 2>&1; then
+    ok "mariadb ja esta rodando na porta $MY_PORT"; return 0
+  fi
+  if [ ! -d "$BASE/mysql/mysql" ]; then
+    rm -rf "${BASE:?}/mysql" && mkdir -p "$BASE/mysql"
+    mariadb-install-db --datadir="$BASE/mysql" --auth-root-authentication-method=normal \
+                       --skip-test-db >"$LOGS/mariadb-install.log" 2>&1 \
+      || { warn "mariadb-install-db falhou"; tail -5 "$LOGS/mariadb-install.log"; return 1; }
+  fi
+  # --pid-file e --socket em caminho GRAVAVEL: o default /run/mysqld e do root
+  # e o servidor morre com "can't create PID file: Permission denied".
+  mariadbd --datadir="$BASE/mysql" --port=$MY_PORT \
+           --socket="$RUN/mysql.sock" --pid-file="$RUN/mysql.pid" \
+           --bind-address=127.0.0.1 >"$LOGS/mariadb.log" 2>&1 &
+  for _ in $(seq 1 30); do
+    mariadb-admin --socket="$RUN/mysql.sock" -u root ping >/dev/null 2>&1 \
+      && { ok "mariadb em mysql://root@127.0.0.1:$MY_PORT/ (sem senha)"; return 0; }
+    sleep 1
+  done
+  warn "mariadb nao respondeu em 30s"; tail -5 "$LOGS/mariadb.log"; return 1
+}
+
+stop_mysql() {
+  mariadb-admin --socket="$RUN/mysql.sock" -u root shutdown >/dev/null 2>&1
+  pkill -f "mariadbd --datadir=$BASE/mysql" 2>/dev/null
+  ok "mariadb parado"
+}
+
+status() {
+  local s
+  for db in mongo redis postgres mysql; do
+    case $db in
+      mongo)    mongosh --quiet --port $MONGOD_PORT --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1 && s="UP" || s="down" ;;
+      redis)    redis-cli -p $REDIS_PORT ping >/dev/null 2>&1 && s="UP" || s="down" ;;
+      postgres) pg_isready -h /tmp -p $PG_PORT >/dev/null 2>&1 && s="UP" || s="down" ;;
+      mysql)    mariadb-admin --socket="$RUN/mysql.sock" -u root ping >/dev/null 2>&1 && s="UP" || s="down" ;;
+    esac
+    printf '  %-10s %s\n' "$db" "$s"
+  done
+  echo
+  echo "  clientes: mongosh, redis-cli, psql, mariadb, sqlite3"
+  echo "  dados:    $BASE/<banco>   logs: $LOGS/"
+}
+
+url() {
+  case "${1:-}" in
+    mongo)    echo "mongodb://127.0.0.1:$MONGOD_PORT" ;;
+    redis)    echo "redis://127.0.0.1:$REDIS_PORT" ;;
+    postgres) echo "postgresql://postgres@127.0.0.1:$PG_PORT/postgres" ;;
+    mysql)    echo "mysql://root@127.0.0.1:$MY_PORT/" ;;
+    *) die "uso: sandbox-db url mongo|redis|postgres|mysql" ;;
+  esac
+}
+
+[ $# -ge 1 ] || { echo "uso: sandbox-db {start|stop|status|url} [mongo|redis|postgres|mysql|all]"; exit 1; }
+
+CMD="$1"; TARGET="${2:-all}"
+
+case "$CMD" in
+  start)
+    case "$TARGET" in
+      all) for d in mongo redis postgres mysql; do "start_$d"; done ;;
+      mongo|redis|postgres|mysql) "start_$TARGET" ;;
+      *) die "banco desconhecido: $TARGET" ;;
+    esac ;;
+  stop)
+    case "$TARGET" in
+      all) for d in mysql postgres redis mongo; do "stop_$d"; done ;;
+      mongo|redis|postgres|mysql) "stop_$TARGET" ;;
+      *) die "banco desconhecido: $TARGET" ;;
+    esac ;;
+  status) status ;;
+  url)    url "$TARGET" ;;
+  *) die "comando desconhecido: $CMD" ;;
+esac
