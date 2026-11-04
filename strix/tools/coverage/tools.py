@@ -27,6 +27,8 @@ from typing import Any
 
 from agents import RunContextWrapper, function_tool
 
+from strix.skills import get_risk_skill_names
+
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,52 @@ def _caller_identity(ctx: RunContextWrapper) -> tuple[str | None, str | None]:
             raw_agent_name = names.get(agent_id)
             agent_name = raw_agent_name if isinstance(raw_agent_name, str) else None
     return agent_id, agent_name
+
+
+def _caller_assigned_skills(ctx: RunContextWrapper) -> list[str]:
+    """Vulnerability skills the runtime assigned to the calling agent."""
+    inner = ctx.context if isinstance(ctx.context, dict) else {}
+    agent_id = inner.get("agent_id")
+    coordinator = inner.get("coordinator")
+    if not isinstance(agent_id, str) or coordinator is None:
+        return []
+    metadata = getattr(coordinator, "metadata", {})
+    meta = metadata.get(agent_id) if isinstance(metadata, dict) else None
+    skills = meta.get("skills") if isinstance(meta, dict) else None
+    return [str(skill) for skill in skills] if isinstance(skills, list) else []
+
+
+def _skill_leaf(skill: str) -> str:
+    return skill.rsplit("/", maxsplit=1)[-1].strip().lower()
+
+
+def _normalize_risk_class(risk_class: str | None) -> tuple[str | None, list[str]]:
+    """Canonical skill name for *risk_class*, or an error naming the contract."""
+    if risk_class is None or not risk_class.strip():
+        return None, []
+    canonical = _skill_leaf(risk_class)
+    available = get_risk_skill_names()
+    if available and canonical not in available:
+        return None, [
+            f"Invalid risk_class: {risk_class!r}. Must be the name of a vulnerability "
+            f"skill (e.g. {sorted(available)[:3]} ...). Use risk_area for free text."
+        ]
+    return canonical, []
+
+
+def _derive_risk_class(assigned_skills: list[str] | None) -> str | None:
+    """The class an agent's own assignment pins down, when it pins down one.
+
+    Only an agent carrying exactly one vulnerability skill can have a row
+    attributed to it without guessing: with two or more, either choice is
+    fiction, and fiction here would close an obligation nobody met.
+    """
+    if not assigned_skills:
+        return None
+    risk_skills = get_risk_skill_names()
+    carriers = {_skill_leaf(skill) for skill in assigned_skills}
+    carriers &= risk_skills
+    return next(iter(carriers)) if len(carriers) == 1 else None
 
 
 def _generate_entry_id() -> str | None:
@@ -196,10 +244,19 @@ def _record_impl(
     evidence: str,
     agent_id: str | None,
     agent_name: str | None,
+    risk_class: str | None = None,
+    assigned_skills: list[str] | None = None,
 ) -> dict[str, Any]:
     normalized, errors = _validate(
         surface=surface, risk_area=risk_area, outcome=outcome, evidence=evidence
     )
+    canonical_class, class_errors = _normalize_risk_class(risk_class)
+    errors.extend(class_errors)
+    class_source: str | None = "agent" if canonical_class else None
+    if canonical_class is None:
+        derived = _derive_risk_class(assigned_skills)
+        if derived:
+            canonical_class, class_source = derived, "derived_from_assignment"
     if errors:
         return {"success": False, "error": "Validation failed", "errors": errors}
 
@@ -209,6 +266,9 @@ def _record_impl(
         "outcome": normalized,
         "created_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
     }
+    if canonical_class:
+        entry["risk_class"] = canonical_class
+        entry["risk_class_source"] = class_source
     if evidence.strip():
         entry["evidence"] = evidence.strip()
     if agent_id:
@@ -263,6 +323,7 @@ def _update_impl(
     evidence: str,
     agent_id: str | None,
     agent_name: str | None,
+    risk_class: str | None = None,
 ) -> dict[str, Any]:
     key = (entry_id or "").strip()
     with _coverage_lock:
@@ -280,6 +341,8 @@ def _update_impl(
         normalized, errors = _validate(
             surface=surface, risk_area=risk_area, outcome=outcome, evidence=evidence
         )
+        canonical_class, class_errors = _normalize_risk_class(risk_class)
+        errors.extend(class_errors)
         if errors:
             return {"success": False, "error": "Validation failed", "errors": errors}
 
@@ -292,11 +355,16 @@ def _update_impl(
             superseded["evidence"] = existing["evidence"]
         if existing.get("agent_name"):
             superseded["agent_name"] = existing["agent_name"]
+        if existing.get("risk_class"):
+            superseded["risk_class"] = existing["risk_class"]
         history = existing.get("history")
         existing["history"] = [*history, superseded] if isinstance(history, list) else [superseded]
 
         existing["outcome"] = normalized
         existing["updated_at"] = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+        if canonical_class:
+            existing["risk_class"] = canonical_class
+            existing["risk_class_source"] = "agent"
         if evidence.strip():
             existing["evidence"] = evidence.strip()
         if agent_id:
@@ -345,6 +413,7 @@ def _list_impl(
             "entry_id": entry.get("entry_id"),
             "surface": entry.get("surface", ""),
             "risk_area": entry.get("risk_area", ""),
+            "risk_class": entry.get("risk_class", ""),
             "outcome": entry.get("outcome", ""),
             "created_at": entry.get("created_at", ""),
         }
@@ -380,6 +449,7 @@ async def record_coverage(
     surface: str,
     risk_area: str,
     outcome: str,
+    risk_class: str | None = None,
     evidence: str = "",
 ) -> str:
     """Record that you reviewed a surface, and how that review closed.
@@ -393,6 +463,15 @@ async def record_coverage(
     Record coverage as you go, not in a batch at the end. Entries are
     shared across every agent in the scan, and the root agent reconciles
     them into the final report.
+
+    **Risk class.** ``risk_class`` is what the runtime compares against the
+    vulnerability skill you were assigned. Pass the skill name verbatim
+    (``"business_logic"``, ``"sql_injection"``) — not a sentence. ``risk_area``
+    stays free text for the human reader and never closes a class on its own:
+    "XSS/SSRF/XXE/SSTI/RCE sinks" is a useful risk area but records no
+    specific class. Omit ``risk_class`` only when no assigned skill names the
+    class; the runtime then derives it only if your assignment makes it
+    unambiguous, otherwise the class stays open.
 
     Coverage is not append-only bookkeeping: if this surface and risk
     already have an entry — yours or another agent's — this call is
@@ -426,11 +505,14 @@ async def record_coverage(
         surface: What you reviewed — an endpoint, route, parameter,
             file, component, or host (e.g. ``"POST /api/orders/{id}"``,
             ``"src/auth/session.py"``, ``"admin dashboard"``).
-        risk_area: What you were testing it for (e.g. ``"IDOR /
+        risk_area: What you were testing it for, in prose (e.g. ``"IDOR /
             object-level authorization"``, ``"SQL injection"``,
-            ``"SSRF"``).
+            ``"SSRF"``). Free text: it does not close a risk class.
         outcome: One of ``reported`` / ``no_issue_found`` /
             ``ruled_out`` / ``not_applicable`` / ``needs_follow_up``.
+        risk_class: Canonical name of the vulnerability skill this row
+            exercises (e.g. ``"business_logic"``, ``"sql_injection"``).
+            This is the structured field the coverage matcher reads.
         evidence: How you know. Required for ``ruled_out``,
             ``not_applicable``, and ``needs_follow_up``; recommended
             otherwise. Keep it to a sentence or two — name the control,
@@ -443,6 +525,8 @@ async def record_coverage(
         risk_area=risk_area,
         outcome=outcome,
         evidence=evidence,
+        risk_class=risk_class,
+        assigned_skills=_caller_assigned_skills(ctx),
         agent_id=agent_id,
         agent_name=agent_name,
     )
@@ -455,6 +539,7 @@ async def update_coverage(
     entry_id: str,
     outcome: str,
     evidence: str = "",
+    risk_class: str | None = None,
 ) -> str:
     """Change how an already-recorded surface closed.
 
@@ -490,6 +575,10 @@ async def update_coverage(
             ``not_applicable``, and ``needs_follow_up``. Say what
             changed, not just what you concluded — the reader needs to
             know why this closed differently the second time.
+        risk_class: Canonical vulnerability skill name, when the entry
+            was recorded without one and you can now name the class it
+            exercises. This is what closes the class in the coverage
+            matcher; the surrogate ``risk_area`` text does not.
     """
     agent_id, agent_name = _caller_identity(ctx)
     result = await asyncio.to_thread(
@@ -497,6 +586,7 @@ async def update_coverage(
         entry_id=entry_id,
         outcome=outcome,
         evidence=evidence,
+        risk_class=risk_class,
         agent_id=agent_id,
         agent_name=agent_name,
     )

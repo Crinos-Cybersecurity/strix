@@ -212,6 +212,25 @@ def get_available_skills() -> dict[str, list[dict[str, str]]]:
     return grouped
 
 
+_RISK_SKILL_CATEGORY = "vulnerabilities"
+
+
+def get_risk_skill_names() -> frozenset[str]:
+    """Bare names of every skill that denotes a vulnerability class.
+
+    Carrying one of these obliges an agent to record coverage of that class;
+    ``tooling`` and ``reconnaissance`` skills describe how an agent works and
+    carry no such obligation. Kept here so the ledger tool and the report
+    matcher agree on what counts as a class.
+    """
+    try:
+        entries = get_available_skills().get(_RISK_SKILL_CATEGORY, [])
+        return frozenset(entry["name"] for entry in entries if entry.get("name"))
+    except OSError:
+        logger.warning("could not enumerate vulnerability skills", exc_info=True)
+        return frozenset()
+
+
 def validate_requested_skills(skill_list: list[str], max_skills: int = 5) -> str | None:
     """Validate a list of user-passed skill names.
 
