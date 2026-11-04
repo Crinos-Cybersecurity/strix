@@ -100,7 +100,10 @@ do not delete it.
 ## Recording Closure
 
 Closure is only useful if it is written down. Every surface you assess
-gets a `record_coverage` entry:
+gets a `record_coverage` entry. Pass `risk_class` as the canonical
+vulnerability skill name (e.g. `idor`, `business_logic`): that structured
+field is what the coverage matcher compares against an assigned skill.
+`risk_area` stays prose for the reader and closes nothing by itself.
 
 - `confirmed` → outcome `reported`, once the report is filed.
 - `ruled_out` → outcome `ruled_out`, with the named control in
