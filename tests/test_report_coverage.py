@@ -6,12 +6,10 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from strix.report.coverage import (
-    _SKILL_PHRASINGS,
     build_coverage_document,
     read_agent_graph,
     write_coverage,
 )
-from strix.skills import get_available_skills
 
 
 if TYPE_CHECKING:
@@ -22,6 +20,7 @@ def _entry(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "surface": "POST /api/orders/{id}",
         "risk_area": "object-level authorization",
+        "risk_class": "idor",
         "outcome": "no_issue_found",
         "evidence": "Two tenants tested; both received 403.",
         "agent_id": "agent-1",
@@ -86,18 +85,64 @@ def test_assigned_risk_skill_without_coverage_becomes_a_gap() -> None:
 
 def test_recorded_risk_class_is_not_reported_as_a_gap() -> None:
     doc = _document(
-        entries=[_entry(risk_area="SQL injection", surface="GET /search?q=")],
+        entries=[
+            _entry(risk_area="SQL injection", risk_class="sql_injection", surface="GET /search?q=")
+        ],
         agent_graph=_graph(metadata={"agent-1": {"skills": ["sql_injection"]}}),
     )
 
     assert not [gap for gap in doc["gaps"] if gap["kind"] == "unrecorded_risk_class"]
 
 
-def test_synonym_phrasing_counts_as_recorded_coverage() -> None:
-    """The ledger says "object-level authorization"; the skill is called idor."""
-    doc = _document(agent_graph=_graph(metadata={"agent-1": {"skills": ["idor"]}}))
+def test_free_text_risk_area_does_not_close_a_gap() -> None:
+    """Only the structured class counts; a sentence is prose, not an identifier.
+
+    The pre-fix matcher compared the assigned skill name with the free-text
+    ``risk_area``. Scan 0e9c916d filed 19 rows whose risk areas read like
+    "XSS/SSRF/XXE/SSTI/RCE sinks" and still published a false
+    ``unrecorded_risk_class`` gap for ``business_logic``.
+    """
+    doc = _document(
+        entries=[_entry(risk_class=None, risk_area="SQL injection")],
+        agent_graph=_graph(metadata={"agent-1": {"skills": ["sql_injection"]}}),
+    )
+
+    gaps = [gap for gap in doc["gaps"] if gap["kind"] == "unrecorded_risk_class"]
+    assert [gap["risk_area"] for gap in gaps] == ["sql injection"]
+
+
+def test_risk_class_closes_the_gap_despite_an_unrelated_risk_area() -> None:
+    """The exact shape of 0e9c916d's false gap: class recorded, prose differs."""
+    doc = _document(
+        entries=[
+            _entry(
+                risk_area="XSS/SSRF/XXE/SSTI/RCE sinks",
+                risk_class="business_logic",
+                surface="POST /api/orders/{id}/refund",
+            )
+        ],
+        agent_graph=_graph(metadata={"agent-1": {"skills": ["business_logic"]}}),
+    )
 
     assert not [gap for gap in doc["gaps"] if gap["kind"] == "unrecorded_risk_class"]
+
+
+def test_category_qualified_risk_class_matches_the_bare_skill() -> None:
+    doc = _document(
+        entries=[
+            _entry(risk_class="vulnerabilities/path_traversal_lfi_rfi", risk_area="Path Traversal")
+        ],
+        agent_graph=_graph(metadata={"agent-1": {"skills": ["path_traversal_lfi_rfi"]}}),
+    )
+
+    assert not [gap for gap in doc["gaps"] if gap["kind"] == "unrecorded_risk_class"]
+
+
+def test_ledger_surfaces_the_structured_class() -> None:
+    doc = _document()
+
+    assert doc["entries"][0]["risk_class"] == "idor"
+    assert doc["entries"][0]["risk_class_source"] == ""
 
 
 def test_non_risk_skills_carry_no_coverage_obligation() -> None:
@@ -186,6 +231,7 @@ def test_gaps_make_the_record_partial_even_when_the_run_finished() -> None:
     assert "coverage gap" in caveat
     assert "unrecorded_risk_class" in caveat
 
+
 def test_write_coverage_emits_a_top_level_artifact(tmp_path: Path) -> None:
     path = write_coverage(tmp_path, _document())
 
@@ -204,38 +250,6 @@ def test_read_agent_graph_loads_a_snapshot(tmp_path: Path) -> None:
     (tmp_path / "agents.json").write_text(json.dumps(_graph()), encoding="utf-8")
 
     assert read_agent_graph(tmp_path)["names"] == {"agent-1": "authz-tester"}
-
-
-def test_multi_token_skill_matches_how_a_pentester_writes_it() -> None:
-    """An agent carrying path_traversal_lfi_rfi records "Path Traversal".
-
-    Requiring the skill's filename verbatim published a false gap for a class
-    that had been tested and even had a finding filed against it.
-    """
-    doc = _document(
-        entries=[_entry(risk_area="Path Traversal / Directory Traversal", surface="/download")],
-        agent_graph=_graph(metadata={"agent-1": {"skills": ["path_traversal_lfi_rfi"]}}),
-    )
-
-    assert not [gap for gap in doc["gaps"] if gap["kind"] == "unrecorded_risk_class"]
-
-
-def _vulnerability_skill_names() -> set[str]:
-    return {skill["name"] for skill in get_available_skills()["vulnerabilities"]}
-
-
-def test_every_vulnerability_skill_declares_its_phrasings() -> None:
-    """A new skill without phrasings would be matched by its filename alone,
-    which is how the false gap above got published."""
-    missing = _vulnerability_skill_names() - set(_SKILL_PHRASINGS)
-
-    assert not missing, f"add ledger phrasings for: {sorted(missing)}"
-
-
-def test_declared_phrasings_name_real_skills() -> None:
-    stale = set(_SKILL_PHRASINGS) - _vulnerability_skill_names()
-
-    assert not stale, f"phrasings for skills that no longer exist: {sorted(stale)}"
 
 
 def _delegating_graph(**overrides: Any) -> dict[str, Any]:

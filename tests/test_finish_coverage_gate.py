@@ -26,10 +26,11 @@ def _empty_ledger(tmp_path: Path) -> None:
     hydrate_coverage_from_disk(tmp_path)
 
 
-def _record(risk_area: str) -> None:
+def _record(risk_class: str, risk_area: str) -> None:
     _record_impl(
         surface="POST /api/orders/{id}",
         risk_area=risk_area,
+        risk_class=risk_class,
         outcome="no_issue_found",
         evidence="Parameters fuzzed; no anomalies.",
         agent_id="agent-1",
@@ -38,7 +39,7 @@ def _record(risk_area: str) -> None:
 
 
 def test_unrecorded_risk_class_is_reported_back_to_the_root_agent() -> None:
-    _record("SQL injection")
+    _record("sql_injection", "SQL injection")
 
     summary = _coverage_summary(_GRAPH)
 
@@ -49,8 +50,8 @@ def test_unrecorded_risk_class_is_reported_back_to_the_root_agent() -> None:
 
 
 def test_fully_accounted_coverage_raises_no_gap_warning() -> None:
-    _record("SQL injection")
-    _record("cross-site scripting")
+    _record("sql_injection", "SQL injection")
+    _record("xss", "cross-site scripting")
 
     summary = _coverage_summary(_GRAPH)
 
