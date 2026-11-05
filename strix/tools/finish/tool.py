@@ -57,6 +57,27 @@ def _do_finish(
                 "message": "Scan completed (not persisted)",
                 "warning": "Results could not be persisted - report state unavailable",
             }
+        coverage_summary = _coverage_summary(agent_graph)
+        gaps = coverage_summary.get("coverage_gaps") or []
+        if gaps:
+            # Refuse before persisting anything. The report would otherwise
+            # publish these classes as unexamined while the scan still looks
+            # finished; the root agent is the last point that can dispatch
+            # work or record the class as explicitly unresolved.
+            return {
+                "success": False,
+                "scan_completed": False,
+                "error": (
+                    f"Refusing to finish: {len(gaps)} risk class(es) assigned to "
+                    "agents have no coverage entry. Record each one with "
+                    "record_coverage(risk_class=...) — or a needs_follow_up row — "
+                    "then call finish_scan again."
+                ),
+                "coverage_gaps": gaps,
+                "coverage_gap_warning": coverage_summary.get("coverage_gap_warning", ""),
+                "coverage_recorded": coverage_summary.get("coverage_recorded", 0),
+                "coverage_outcomes": coverage_summary.get("coverage_outcomes", {}),
+            }
         report_state.update_scan_final_fields(
             executive_summary=executive_summary.strip(),
             methodology=methodology.strip(),
@@ -64,7 +85,6 @@ def _do_finish(
             recommendations=recommendations.strip(),
         )
         vuln_count = len(report_state.vulnerability_reports)
-        coverage_summary = _coverage_summary(agent_graph)
     except (ImportError, AttributeError) as e:
         logger.exception("finish_scan persistence failed")
         return {"success": False, "error": f"Failed to complete scan: {e!s}"}
@@ -203,8 +223,14 @@ async def finish_scan(
        should have a coverage entry; anything still open should be a
        ``needs_follow_up`` row, not a silent omission. If a significant
        surface has no entry at all, dispatch an agent to cover it or
-       record it as ``needs_follow_up`` before finishing. The response
-       from this tool reports coverage counts and any unresolved rows.
+       record it as ``needs_follow_up`` before finishing.
+
+       **This tool refuses to finish while an assigned risk class has no
+       coverage entry.** The refusal lists the classes; record each with
+       ``record_coverage(risk_class=...)`` (a ``needs_follow_up`` row is
+       acceptable when the class could not be assessed) and call again.
+       The response from a successful call reports coverage counts and any
+       unresolved rows.
 
     **Calling this multiple times overwrites the previous report.**
     Make the single call comprehensive.
