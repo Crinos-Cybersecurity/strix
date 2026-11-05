@@ -96,7 +96,7 @@ def test_finish_refuses_and_does_not_persist_when_a_class_is_unrecorded(monkeypa
     assert result["success"] is False
     assert result["scan_completed"] is False
     assert "Refusing to finish" in result["error"]
-    assert "xss" in result["coverage_gaps"][0]["detail"]
+    assert any("xss" in gap for gap in result["coverage_gaps"])
     assert state.final is None
 
 
