@@ -69,11 +69,10 @@ def _do_finish(
                 "scan_completed": False,
                 "error": (
                     f"Refusing to finish: {len(gaps)} coverage gap(s) the runtime can "
-                    "see. Either an assigned risk class has no coverage entry, or an "
-                    "agent ran without recording anything at all. Record the surfaces "
-                    "that agent assessed with record_coverage(risk_class=...) — a "
-                    "not_applicable or needs_follow_up row is acceptable — or reopen "
-                    "the agent if it can still run, then call finish_scan again."
+                    "see. An assigned risk class has no coverage entry. Record the "
+                    "surfaces with record_coverage(risk_class=...) — a not_applicable "
+                    "or needs_follow_up row is acceptable — or reopen the agent if it "
+                    "can still run, then call finish_scan again."
                 ),
                 "coverage_gaps": gaps,
                 "coverage_gap_warning": coverage_summary.get("coverage_gap_warning", ""),
@@ -116,7 +115,11 @@ def _coverage_summary(agent_graph: dict[str, Any]) -> dict[str, Any]:
     root agent can still dispatch work or record the surface as unresolved
     instead of letting the report imply it was clean.
     """
-    from strix.report.coverage import agents_from_graph, blocking_coverage_gaps
+    from strix.report.coverage import (
+        agents_from_graph,
+        blocking_coverage_gaps,
+        silent_agent_gaps,
+    )
     from strix.tools.coverage.tools import get_coverage_entries, outcome_counts
 
     entries = get_coverage_entries()
@@ -147,13 +150,24 @@ def _coverage_summary(agent_graph: dict[str, Any]) -> dict[str, Any]:
             for e in unresolved
         ]
 
-    gaps = blocking_coverage_gaps(entries, agents_from_graph(agent_graph))
+    agents = agents_from_graph(agent_graph)
+    gaps = blocking_coverage_gaps(entries, agents)
     if gaps:
         summary["coverage_gaps"] = [gap["detail"] for gap in gaps]
         summary["coverage_gap_warning"] = (
             f"{len(gaps)} coverage gap(s) will be published as unexamined: assigned "
-            "risk classes with no entry and/or agents that recorded nothing. Record "
-            "them (or a not_applicable / needs_follow_up row) before the report goes out."
+            "risk classes with no entry. Record them (or a not_applicable / "
+            "needs_follow_up row) before the report goes out."
+        )
+
+    silent = silent_agent_gaps(entries, agents)
+    if silent:
+        summary["coverage_warnings"] = [gap["detail"] for gap in silent]
+        summary["coverage_warning"] = (
+            f"{len(silent)} agent(s) ran without recording coverage. This does not "
+            "block finishing — the report publishes the gap and marks the scan "
+            "incomplete. Record needs_follow_up rows for their surfaces if possible, "
+            "or leave the gap explicit."
         )
     return summary
 

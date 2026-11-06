@@ -224,22 +224,32 @@ def _unresolved_gaps(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if entry.get("outcome") == "needs_follow_up"
     ]
 
+def silent_agent_gaps(
+    entries: list[dict[str, Any]], agents: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Agents that ran without recording any coverage.
+
+    These are published as coverage gaps in the report, but they do **not**
+    block ``finish_scan``: the agent is already completed and cannot
+    retroactively record coverage. Blocking on it would deadlock the root in
+    a finish loop. The ``agent_finish`` gate prevents new silent agents at
+    the source; this is the non-blocking safety net for agents stopped by the
+    parent or killed by a timeout.
+    """
+    return _silent_agent_gaps(entries, agents)
+
 def blocking_coverage_gaps(
     entries: list[dict[str, Any]], agents: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Gaps the runtime can see that still block calling a scan complete.
+    """Gaps that still block calling a scan complete.
 
-    Two shapes are blocking because both describe scope no agent accounted
-    for: a risk class an assigned agent never recorded, and an agent that ran
-    without recording anything at all. A ``needs_follow_up`` row is an
-    explicit attestation that the surface was assessed and left open, so it
-    is deliberately *not* included here — publishing an honest unresolved
-    item is a valid way to close a scan.
+    Only assigned risk classes with no coverage entry are blocking: the root
+    can still dispatch or record them. Silent agents are deliberately
+    non-blocking (see ``silent_agent_gaps``); the report publishes them and
+    marks the scan incomplete instead of deadlocking the finish loop. A
+    ``needs_follow_up`` row is an explicit attestation, so it is not here.
     """
-    return [
-        *skill_coverage_gaps(entries, agents),
-        *_silent_agent_gaps(entries, agents),
-    ]
+    return skill_coverage_gaps(entries, agents)
 
 
 def _completeness(
