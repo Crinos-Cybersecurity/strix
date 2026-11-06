@@ -166,19 +166,19 @@ def test_finish_accepts_needs_follow_up_as_attestation(monkeypatch) -> None:
     assert state.final is not None
 
 
-def test_silent_agent_is_reported_back_to_the_root_agent() -> None:
+def test_silent_agent_is_reported_as_non_blocking_warning() -> None:
     _record("sql_injection", "SQL injection")
     _record("xss", "cross-site scripting")
 
     summary = _coverage_summary(_TWO_AGENT_GRAPH)
 
-    assert len(summary["coverage_gaps"]) == 1
-    assert "recon" in summary["coverage_gaps"][0]
-    assert "without recording any coverage" in summary["coverage_gaps"][0]
-    assert "agents that recorded nothing" in summary["coverage_gap_warning"]
+    assert "coverage_gaps" not in summary
+    assert len(summary["coverage_warnings"]) == 1
+    assert "recon" in summary["coverage_warnings"][0]
+    assert "without recording any coverage" in summary["coverage_warnings"][0]
+    assert "does not block finishing" in summary["coverage_warning"]
 
-
-def test_finish_refuses_when_an_agent_recorded_nothing(monkeypatch) -> None:
+def test_finish_persists_when_an_agent_recorded_nothing(monkeypatch) -> None:
     state = _FakeReportState()
     monkeypatch.setattr("strix.report.state.get_global_report_state", lambda: state)
     _record("sql_injection", "SQL injection")
@@ -186,12 +186,11 @@ def test_finish_refuses_when_an_agent_recorded_nothing(monkeypatch) -> None:
 
     result = _finish(_TWO_AGENT_GRAPH)
 
-    assert result["success"] is False
-    assert result["scan_completed"] is False
-    assert "Refusing to finish" in result["error"]
-    assert any("recon" in gap for gap in result["coverage_gaps"])
-    assert state.final is None
-
+    assert result["success"] is True
+    assert result["scan_completed"] is True
+    assert "coverage_gaps" not in result
+    assert any("recon" in warning for warning in result["coverage_warnings"])
+    assert state.final is not None
 
 def test_finish_persists_when_every_agent_recorded_something(monkeypatch) -> None:
     state = _FakeReportState()
