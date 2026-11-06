@@ -68,10 +68,12 @@ def _do_finish(
                 "success": False,
                 "scan_completed": False,
                 "error": (
-                    f"Refusing to finish: {len(gaps)} risk class(es) assigned to "
-                    "agents have no coverage entry. Record each one with "
-                    "record_coverage(risk_class=...) — or a needs_follow_up row — "
-                    "then call finish_scan again."
+                    f"Refusing to finish: {len(gaps)} coverage gap(s) the runtime can "
+                    "see. Either an assigned risk class has no coverage entry, or an "
+                    "agent ran without recording anything at all. Record the surfaces "
+                    "that agent assessed with record_coverage(risk_class=...) — a "
+                    "not_applicable or needs_follow_up row is acceptable — or reopen "
+                    "the agent if it can still run, then call finish_scan again."
                 ),
                 "coverage_gaps": gaps,
                 "coverage_gap_warning": coverage_summary.get("coverage_gap_warning", ""),
@@ -106,14 +108,15 @@ def _do_finish(
 def _coverage_summary(agent_graph: dict[str, Any]) -> dict[str, Any]:
     """Coverage counts, unresolved surfaces, and gaps the runtime can see.
 
-    The gap list is derived from the agent graph rather than from the ledger,
-    so it catches the failure the ledger cannot: a risk class an agent was
-    equipped for and never accounted for. Surfacing it here — in the response
-    to the call that ends the scan — is the last point at which the root agent
-    can still dispatch work or record the class as unresolved instead of
-    letting the report imply it was clean.
+    The gap list is derived from the agent graph and the ledger together, so
+    it catches the failures neither source can show alone: a risk class an
+    agent was equipped for and never accounted for, and an agent that ran
+    without recording any coverage at all. Surfacing them here — in the
+    response to the call that ends the scan — is the last point at which the
+    root agent can still dispatch work or record the surface as unresolved
+    instead of letting the report imply it was clean.
     """
-    from strix.report.coverage import agents_from_graph, skill_coverage_gaps
+    from strix.report.coverage import agents_from_graph, blocking_coverage_gaps
     from strix.tools.coverage.tools import get_coverage_entries, outcome_counts
 
     entries = get_coverage_entries()
@@ -144,13 +147,13 @@ def _coverage_summary(agent_graph: dict[str, Any]) -> dict[str, Any]:
             for e in unresolved
         ]
 
-    gaps = skill_coverage_gaps(entries, agents_from_graph(agent_graph))
+    gaps = blocking_coverage_gaps(entries, agents_from_graph(agent_graph))
     if gaps:
         summary["coverage_gaps"] = [gap["detail"] for gap in gaps]
         summary["coverage_gap_warning"] = (
-            f"{len(gaps)} risk class(es) assigned to agents have no coverage entry and "
-            "will be published as unexamined. Record them (or a needs_follow_up row) "
-            "before the report goes out."
+            f"{len(gaps)} coverage gap(s) will be published as unexamined: assigned "
+            "risk classes with no entry and/or agents that recorded nothing. Record "
+            "them (or a not_applicable / needs_follow_up row) before the report goes out."
         )
     return summary
 
@@ -226,11 +229,13 @@ async def finish_scan(
        record it as ``needs_follow_up`` before finishing.
 
        **This tool refuses to finish while an assigned risk class has no
-       coverage entry.** The refusal lists the classes; record each with
-       ``record_coverage(risk_class=...)`` (a ``needs_follow_up`` row is
-       acceptable when the class could not be assessed) and call again.
-       The response from a successful call reports coverage counts and any
-       unresolved rows.
+       coverage entry, or while any agent that ran recorded nothing at
+       all.** The refusal names the gaps; record the affected surfaces
+       with ``record_coverage(risk_class=...)`` (a ``not_applicable`` or
+       ``needs_follow_up`` row is acceptable when the surface does not
+       apply or could not be assessed) or reopen the silent agent if it
+       can still run, then call again. The response from a successful
+       call reports coverage counts and any unresolved rows.
 
     **Calling this multiple times overwrites the previous report.**
     Make the single call comprehensive.

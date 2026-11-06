@@ -18,6 +18,7 @@ from agents.tool_context import ToolContext
 from strix.core.agents import AgentCoordinator
 from strix.report.state import ReportState, set_global_report_state
 from strix.tools.agents_graph.tools import agent_finish, send_message_to_agent, wait_for_agents
+from strix.tools.coverage.tools import _record_impl, hydrate_coverage_from_disk
 
 
 if TYPE_CHECKING:
@@ -32,6 +33,23 @@ def report_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Re
     set_global_report_state(state)
     yield state
     set_global_report_state(None)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_coverage(tmp_path: Path) -> None:
+    """Keep the coverage ledger test-local; agent_finish now reads it."""
+    hydrate_coverage_from_disk(tmp_path)
+
+
+def _record_child_coverage(agent_id: str = "child", agent_name: str = "Validator") -> None:
+    _record_impl(
+        surface="GET /api/audits",
+        risk_area="object-level authorization",
+        outcome="no_issue_found",
+        evidence="Compared two accounts; cross-tenant access denied.",
+        agent_id=agent_id,
+        agent_name=agent_name,
+    )
 
 
 async def _graph(*, interactive: bool) -> AgentCoordinator:
@@ -202,6 +220,7 @@ async def test_interactive_wait_parks_even_without_active_children() -> None:
 @pytest.mark.asyncio
 async def test_agent_finish_lists_the_reports_the_child_filed(report_state: ReportState) -> None:
     coordinator = await _graph(interactive=False)
+    _record_child_coverage()
     mine = report_state.add_vulnerability_report(
         title="IDOR on /api/audits", severity="high", agent_id="child", agent_name="Validator"
     )
@@ -229,6 +248,7 @@ async def test_agent_finish_states_explicitly_when_nothing_was_filed(
     report_state: ReportState,
 ) -> None:
     coordinator = await _graph(interactive=False)
+    _record_child_coverage()
     report_state.add_vulnerability_report(title="Someone else's", severity="low", agent_id="root")
 
     result = await _call(
@@ -249,6 +269,7 @@ async def test_agent_finish_states_explicitly_when_nothing_was_filed(
 async def test_agent_finish_without_report_state_still_completes() -> None:
     set_global_report_state(None)
     coordinator = await _graph(interactive=False)
+    _record_child_coverage()
 
     result = await _call(
         agent_finish, coordinator, "child", {"result_summary": "done"}, parent_id="root"

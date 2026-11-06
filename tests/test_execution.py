@@ -89,6 +89,20 @@ async def _call_agent_finish(
     return parsed
 
 
+def _record_agent_coverage(agent_id: str) -> None:
+    """agent_finish refuses agents with no coverage; these tests need a row."""
+    from strix.tools.coverage.tools import _record_impl
+
+    _record_impl(
+        surface="GET /",
+        risk_area="test surface",
+        outcome="no_issue_found",
+        evidence="Test fixture only.",
+        agent_id=agent_id,
+        agent_name=agent_id,
+    )
+
+
 async def _call_stop_agent(
     coordinator: AgentCoordinator, agent_id: str, target_agent_id: str
 ) -> dict[str, Any]:
@@ -577,6 +591,7 @@ async def test_agent_finish_without_report_still_wakes_parent(tmp_path: Any) -> 
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
     await coordinator.register("child", "recon", parent_id="root")
+    _record_agent_coverage("child")
     session = SQLiteSession("root", tmp_path / "agents.db")
     await coordinator.attach_runtime("root", session=session)
 
@@ -596,6 +611,7 @@ async def test_agent_finish_report_suppresses_the_terminal_notice(tmp_path: Any)
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
     await coordinator.register("child", "recon", parent_id="root")
+    _record_agent_coverage("child")
     session = SQLiteSession("root", tmp_path / "agents.db")
     await coordinator.attach_runtime("root", session=session)
 
