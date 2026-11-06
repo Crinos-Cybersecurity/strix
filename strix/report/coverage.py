@@ -224,6 +224,23 @@ def _unresolved_gaps(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if entry.get("outcome") == "needs_follow_up"
     ]
 
+def blocking_coverage_gaps(
+    entries: list[dict[str, Any]], agents: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Gaps the runtime can see that still block calling a scan complete.
+
+    Two shapes are blocking because both describe scope no agent accounted
+    for: a risk class an assigned agent never recorded, and an agent that ran
+    without recording anything at all. A ``needs_follow_up`` row is an
+    explicit attestation that the surface was assessed and left open, so it
+    is deliberately *not* included here — publishing an honest unresolved
+    item is a valid way to close a scan.
+    """
+    return [
+        *skill_coverage_gaps(entries, agents),
+        *_silent_agent_gaps(entries, agents),
+    ]
+
 
 def _completeness(
     run_record: dict[str, Any],

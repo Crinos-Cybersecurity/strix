@@ -625,7 +625,8 @@ async def agent_finish(
     **Subagents only.** Root agents must call ``finish_scan`` instead;
     this tool refuses to run for root agents. Calling this:
 
-    1. Marks the subagent as ``completed``.
+    1. Marks the subagent as ``completed`` (refused when this agent has
+       recorded no coverage — see below).
     2. Posts a structured completion report to the parent's inbox
        (when ``report_to_parent`` is true).
     3. Stops this subagent's execution.
@@ -640,13 +641,21 @@ async def agent_finish(
     doing: what did you test, what did you find/confirm/rule out,
     what's still open.
 
-    **Close out honestly.** Before calling this, every surface you
-    assessed should have a ``record_coverage`` entry, and anything you
-    could neither confirm nor rule out belongs in ``open_items`` — an
-    unresolved candidate handed up to the parent is useful, a silently
-    dropped one is a missed vulnerability. Reporting nothing and
-    listing no open items asserts the area is clean; only say that if
-    you mean it.
+    **Close out honestly — and with coverage recorded.** Before calling
+    this, every surface you assessed must have a ``record_coverage``
+    entry, and anything you could neither confirm nor rule out belongs
+    in ``open_items`` — an unresolved candidate handed up to the parent
+    is useful, a silently dropped one is a missed vulnerability.
+    Reporting nothing and listing no open items asserts the area is
+    clean; only say that if you mean it.
+
+    **This tool refuses to complete an agent that recorded no coverage
+    at all.** If the ledger holds no entry for this agent, the call
+    returns ``success: false`` without marking the agent completed or
+    notifying the parent. Record every surface you examined — a
+    ``not_applicable`` row when the surface does not apply, or a
+    ``needs_follow_up`` row when it could not be assessed — then call
+    ``agent_finish`` again.
 
     Args:
         result_summary: What you accomplished and discovered. Concrete
@@ -687,6 +696,32 @@ async def agent_finish(
                 "success": False,
                 "error": (
                     "agent_finish is for subagents. Root/main agents must call finish_scan instead"
+                ),
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+
+    # Imported here rather than at module scope: the coverage tool imports
+    # report modules that pull in this package, so a top-level import would
+    # close the cycle.
+    from strix.tools.coverage.tools import get_coverage_entries
+
+    if not any(str(entry.get("agent_id")) == me for entry in get_coverage_entries()):
+        # Do not mark completed and do not notify the parent: a silent agent
+        # otherwise leaves a gap the report cannot describe. The agent is
+        # still live, so it can record coverage and call this again.
+        return json.dumps(
+            {
+                "success": False,
+                "agent_completed": False,
+                "agent_id": me,
+                "error": (
+                    "Refusing to finish: this agent has recorded no coverage. "
+                    "Call record_coverage for every surface you assessed — use "
+                    "outcome 'not_applicable' when the surface does not apply, or "
+                    "'needs_follow_up' when you could not confirm or rule it out — "
+                    "then call agent_finish again."
                 ),
             },
             ensure_ascii=False,
